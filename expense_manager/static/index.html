@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <script>
+    // Served under a sub-path (e.g. Tailscale https://host/expenses): relative URLs need a trailing slash.
+    if (!location.pathname.endsWith("/")) location.replace(location.pathname + "/" + location.search + location.hash);
+  </script>
+  <title>Expense Manager</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>₹</text></svg>" />
+  <link rel="stylesheet" href="static/styles.css" />
+  <link rel="manifest" href="static/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="static/icon-192.png" />
+  <meta name="theme-color" content="#0f1216" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand">₹ Expense Manager</div>
+    <nav>
+      <button data-tab="dashboard" class="active"><span class="ico">📊</span><span>Dashboard</span></button>
+      <button data-tab="transactions"><span class="ico">🧾</span><span>Transactions</span></button>
+      <button data-tab="review"><span class="ico">📥</span><span>Review</span> <span id="review-badge" class="badge hidden"></span></button>
+      <button data-tab="settings"><span class="ico">⚙️</span><span>Settings</span></button>
+    </nav>
+    <div class="month-picker">
+      <button id="prev-month" title="Previous month">‹</button>
+      <input type="month" id="month" />
+      <button id="next-month" title="Next month">›</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============================== DASHBOARD -->
+    <section id="tab-dashboard" class="tab">
+      <div class="kpis">
+        <div class="kpi primary"><div class="label">Spent</div><div class="value" id="k-spend">–</div><div class="sub" id="k-spend-sub"></div></div>
+        <div class="kpi"><div class="label">Avg / day</div><div class="value" id="k-avg">–</div><div class="sub" id="k-avg-sub"></div></div>
+        <div class="kpi"><div class="label">Income</div><div class="value pos" id="k-income">–</div><div class="sub" id="k-income-sub"></div></div>
+        <div class="kpi"><div class="label">Invested</div><div class="value" id="k-invested">–</div><div class="sub">excluded from spend</div></div>
+        <div class="kpi"><div class="label">Card bills paid</div><div class="value" id="k-cc">–</div><div class="sub">excluded from spend</div></div>
+      </div>
+
+      <div class="grid g-2-1">
+        <div class="card"><h3>Daily spend</h3><div class="chart"><canvas id="c-daily"></canvas></div></div>
+        <div class="card"><h3>By category</h3><div class="chart tall-m"><canvas id="c-cat"></canvas></div></div>
+      </div>
+
+      <div class="grid g-2-1">
+        <div class="card"><h3>12-month trend</h3><div class="chart"><canvas id="c-trend"></canvas></div></div>
+        <div class="card"><h3>Budgets</h3><div id="budgets" class="budgets"></div></div>
+      </div>
+
+      <div class="grid g-3">
+        <div class="card"><h3>Top merchants</h3><table class="mini" id="t-merchants"></table></div>
+        <div class="card"><h3>Recurring / subscriptions <span class="muted" id="recurring-total"></span></h3><table class="mini" id="t-recurring"></table></div>
+        <div class="card"><h3>Biggest spends</h3><table class="mini" id="t-biggest"></table></div>
+      </div>
+
+      <div class="grid g-3">
+        <div class="card"><h3>Payment method</h3><div class="chart sm tall-m"><canvas id="c-instr"></canvas></div></div>
+        <div class="card"><h3>By account / card</h3><table class="mini" id="t-accounts"></table></div>
+        <div class="card"><h3>Spend by weekday <span class="muted">(last 6 months)</span></h3><div class="chart sm"><canvas id="c-weekday"></canvas></div></div>
+      </div>
+    </section>
+
+    <!-- ============================== TRANSACTIONS -->
+    <section id="tab-transactions" class="tab hidden">
+      <div class="toolbar">
+        <input type="search" id="f-q" placeholder="Search merchant, UPI id, notes…" />
+        <select id="f-category"><option value="">All categories</option></select>
+        <select id="f-direction"><option value="">Debits & credits</option><option value="debit">Debits</option><option value="credit">Credits</option></select>
+        <select id="f-instrument">
+          <option value="">All methods</option><option>UPI</option><option value="CREDIT_CARD">Credit card</option>
+          <option value="DEBIT_CARD">Debit card</option><option>NETBANKING</option><option>ATM</option><option>OTHER</option>
+        </select>
+        <span class="spacer"></span>
+        <span id="txn-summary" class="muted"></span>
+        <a id="export" class="btn ghost" href="#">Export CSV</a>
+        <button id="add-txn" class="btn">+ Add</button>
+      </div>
+      <div id="txn-list"></div>
+    </section>
+
+    <!-- ============================== REVIEW -->
+    <section id="tab-review" class="tab hidden">
+      <div class="card">
+        <h3>Paste an SMS or email</h3>
+        <p class="muted">Use this to add a transaction by hand or to test the parser.</p>
+        <div class="row">
+          <input id="paste-sender" placeholder="Sender (optional), e.g. AX-HDFCBK" />
+        </div>
+        <textarea id="paste-text" rows="4" placeholder="Rs.250.00 debited from a/c **1234 on 28-09-26 to VPA swiggy@icici …"></textarea>
+        <div class="row"><button id="paste-go" class="btn">Parse & add</button><span id="paste-result" class="muted"></span></div>
+      </div>
+      <div class="toolbar">
+        <div class="seg" id="raw-status">
+          <button data-s="unparsed" class="active">Needs review</button>
+          <button data-s="ignored">Ignored</button>
+          <button data-s="duplicate">Merged duplicates</button>
+          <button data-s="parsed">Parsed</button>
+        </div>
+      </div>
+      <div id="raw-list"></div>
+    </section>
+
+    <!-- ============================== SETTINGS -->
+    <section id="tab-settings" class="tab hidden">
+      <div class="grid g-2">
+        <div class="card">
+          <h3>📧 Gmail</h3>
+          <div id="s-gmail"></div>
+          <div class="row">
+            <button class="btn" id="sync-now">Sync now</button>
+            <input type="number" id="backfill-days" value="180" min="1" style="width:80px" />
+            <button class="btn ghost" id="backfill">Backfill days</button>
+          </div>
+          <div id="sync-result" class="muted"></div>
+        </div>
+        <div class="card">
+          <h3>📱 SMS forwarding (Android)</h3>
+          <div id="s-sms"></div>
+        </div>
+        <div class="card">
+          <h3>🤖 LLM fallback</h3>
+          <div id="s-llm"></div>
+          <div class="row"><button class="btn ghost" id="recat">Re-categorise “Other” transactions</button><span id="recat-result" class="muted"></span></div>
+        </div>
+        <div class="card">
+          <h3>💰 Monthly budgets</h3>
+          <div id="budget-editor" class="budget-editor"></div>
+          <div class="row"><button class="btn" id="save-budgets">Save budgets</button><span id="budget-result" class="muted"></span></div>
+        </div>
+        <div class="card span-2">
+          <h3>🏷️ Category rules <span class="muted">(learned when you re-categorise with “all similar”)</span></h3>
+          <div class="row">
+            <input id="rule-pattern" placeholder="text in merchant or UPI id, e.g. swiggy" />
+            <select id="rule-category"></select>
+            <button class="btn" id="rule-add">Add rule</button>
+          </div>
+          <table class="mini" id="t-rules"></table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="modal" class="modal hidden"><div class="modal-box" id="modal-box"></div></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="static/app.js"></script>
+</body>
+</html>
